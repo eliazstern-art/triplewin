@@ -9,16 +9,29 @@ SUPABASE_KEY = "sb_publishable_4_NGPFu5qip2Jrb3GrIjuw_nOEmn_U3"
 
 HEADERS = {
     "accept": "*/*",
+    "accept-language": "he-IL,he;q=0.9,en-US;q=0.8,en;q=0.7",
     "content-type": "application/json",
+    "origin": "https://headstart.co.il",
     "referer": "https://headstart.co.il/",
+    "sec-ch-ua": '"Chromium";v="148", "Google Chrome";v="148", "Not-A.Brand";v="99"',
+    "sec-ch-ua-mobile": "?0",
+    "sec-ch-ua-platform": '"Windows"',
+    "sec-fetch-dest": "empty",
+    "sec-fetch-mode": "cors",
+    "sec-fetch-site": "same-origin",
     "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36"
 }
 
 HASH_SEGMENTS = "b0a0e327afa087315b0972e4e8aabe03012a8a9ba08a3966674d803a7288a64c"
 HASH_REWARDS  = "f962bcac128d515709041ec617a7e343aa1975975c3350f2c43cf23ab118e651"
 
-# --- שליפת פרויקטים פעילים ---
-def get_projects():
+def make_session():
+    session = requests.Session()
+    session.get("https://headstart.co.il/", headers=HEADERS, timeout=15)
+    time.sleep(1)
+    return session
+
+def get_projects(session):
     params = {
         "operationName": "segmentsQuery",
         "variables": json.dumps({
@@ -29,7 +42,8 @@ def get_projects():
         }, separators=(',', ':')),
         "extensions": json.dumps({"persistedQuery": {"version": 1, "sha256Hash": HASH_SEGMENTS}})
     }
-    r = requests.get("https://headstart.co.il/graphql", params=params, headers=HEADERS)
+    r = session.get("https://headstart.co.il/graphql", params=params, headers=HEADERS, timeout=15)
+    print(f"segmentsQuery status: {r.status_code}, length: {len(r.text)}")
     data = r.json()
 
     projects = []
@@ -49,8 +63,7 @@ def get_projects():
                 })
     return projects
 
-# --- שליפת תשורות לפרויקט ---
-def get_rewards(project_row_id):
+def get_rewards(session, project_row_id):
     variables = {
         "first": 1000000,
         "project": project_row_id,
@@ -63,18 +76,17 @@ def get_rewards(project_row_id):
         "variables": json.dumps(variables, separators=(',', ':')),
         "extensions": json.dumps({"persistedQuery": {"version": 1, "sha256Hash": HASH_REWARDS}})
     }
-    r = requests.get("https://headstart.co.il/graphql", params=params, headers=HEADERS)
+    r = session.get("https://headstart.co.il/graphql", params=params, headers=HEADERS, timeout=15)
     return r.json()
 
-# --- ריצה ראשית ---
 def main():
     supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
     print("שולף פרויקטים פעילים...")
-    projects = get_projects()
+    session = make_session()
+    projects = get_projects(session)
     print(f"נמצאו {len(projects)} פרויקטים")
 
-    # הכנסת פרויקטים
     for p in projects:
         supabase.table("projects").upsert({
             "id": p["id"],
@@ -84,10 +96,9 @@ def main():
         }).execute()
     print(f"✓ עודכנו {len(projects)} פרויקטים ב-Supabase")
 
-    # שליפת תשורות
     all_rewards = []
     for p in projects:
-        result = get_rewards(p["rowId"])
+        result = get_rewards(session, p["rowId"])
         edges = result.get("data", {}).get("allProjectRewards", {}).get("edges", [])
         for edge in edges:
             r = edge["node"]
@@ -109,8 +120,6 @@ def main():
         print(f"✓ {p['title']} — {len(edges)} תשורות")
         time.sleep(0.3)
 
-    # הכנסת תשורות
-    # מחיקה ועדכון מחדש כדי להסיר תשורות שנגמרו
     supabase.table("rewards").delete().neq("id", 0).execute()
     for r in all_rewards:
         supabase.table("rewards").upsert(r).execute()
